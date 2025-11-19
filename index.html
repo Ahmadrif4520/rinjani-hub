@@ -125,11 +125,20 @@
     // Set level log untuk debugging (penting untuk pengembangan)
     setLogLevel('Debug');
 
-    // --- VARIABEL GLOBAL DARI LINGKUNGAN CANVAS ---
-    const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-    const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : { /* Fallback config */ };
-    const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
-
+    // --- FIREBASE CONFIG
+    const firebaseConfig = {
+    apiKey: "AIzaSyBCGEIvPbb_-ep4xC-dyIrBqZQB-wG_l78",
+    authDomain: "sgc-smartrinjani.firebaseapp.com",
+    projectId: "sgc-smartrinjani",
+    storageBucket: "sgc-smartrinjani.firebasestorage.app",
+    messagingSenderId: "137444020054",
+    appId: "1:137444020054:web:433ac3ba130ea59a73d0f7",
+    measurementId: "G-ZST71F2TY6"
+};
+// Gunakan projectId Anda sebagai appId
+const appId = firebaseConfig.projectId;
+// initialAuthToken tidak diperlukan untuk aplikasi standar seperti ini
+const initialAuthToken = null;
     // --- INISIALISASI FIREBASE ---
     let app, db, auth;
     let currentUserId = null;

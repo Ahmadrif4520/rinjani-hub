@@ -1,0 +1,1387 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Aplikasi Warga Digital</title>
+    <!-- Memuat Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Memuat Lucide Icons untuk ikon -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <!-- Konfigurasi Font Inter -->
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f7f9fb;
+        }
+        .card-menu {
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        .card-menu:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 10px 15px rgba(0, 0, 0, 0.1);
+        }
+        /* Custom scrollbar untuk tampilan lebih rapi */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+        .loading-spinner {
+            border: 4px solid rgba(0, 0, 0, 0.1);
+            border-top: 4px solid #3b82f6;
+            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body class="min-h-screen">
+
+<!-- Konten Utama Aplikasi -->
+<div id="app" class="min-h-screen flex flex-col">
+    <!-- Header (Selalu Tampil) -->
+    <header id="header" class="bg-white shadow-md p-4 sticky top-0 z-10 hidden">
+        <div class="max-w-7xl mx-auto flex justify-between items-center">
+            <h1 class="text-xl font-bold text-blue-600">RT Digital <span id="user-role" class="text-sm font-medium text-gray-500"></span></h1>
+            <div class="flex items-center space-x-4">
+                <button id="logout-button" class="bg-red-500 hover:bg-red-600 text-white text-sm font-medium py-2 px-3 rounded-lg shadow-md transition duration-150">
+                    <span class="md:inline hidden">Logout</span>
+                    <i data-lucide="log-out" class="w-4 h-4 inline md:hidden"></i>
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <!-- Halaman Utama (Semua Halaman akan dirender di sini) -->
+    <main class="flex-grow p-4 md:p-8 max-w-7xl mx-auto w-full">
+        <!-- Loading Screen -->
+        <div id="loading-screen" class="flex flex-col items-center justify-center min-h-screen">
+            <div class="loading-spinner"></div>
+            <p class="mt-4 text-gray-600">Memuat Aplikasi...</p>
+        </div>
+
+        <!-- Halaman Auth (Login/Register) -->
+        <div id="auth-page" class="hidden"></div>
+        
+        <!-- Dashboard Warga (Client) -->
+        <div id="client-dashboard" class="hidden"></div>
+
+        <!-- Dashboard Admin -->
+        <div id="admin-dashboard" class="hidden"></div>
+    </main>
+
+    <!-- Footer -->
+    <footer class="p-4 text-center text-sm text-gray-500 bg-gray-100 mt-auto">
+        &copy; 2024 Aplikasi Warga Perumahan. Dibuat dengan Firebase & Tailwind CSS.
+    </footer>
+
+    <!-- Panic Button Modal (Global) -->
+    <div id="panic-modal" class="hidden fixed inset-0 bg-red-900 bg-opacity-90 z-50 flex items-center justify-center p-4" onclick="document.getElementById('panic-modal').classList.add('hidden')">
+        <div class="bg-white rounded-xl shadow-2xl p-8 text-center animate-pulse" onclick="event.stopPropagation()">
+            <i data-lucide="siren" class="w-16 h-16 text-red-600 mx-auto mb-4 animate-bounce"></i>
+            <h2 class="text-3xl font-extrabold text-red-700 mb-2">PEMBERITAHUAN DARURAT!</h2>
+            <p id="panic-message" class="text-xl text-gray-700 mb-6">Telah terjadi situasi darurat di lingkungan. MOHON PERHATIAN!</p>
+            <button onclick="document.getElementById('panic-modal').classList.add('hidden')" class="bg-red-600 hover:bg-red-700 text-white font-bold py-3 px-6 rounded-lg transition duration-300 shadow-lg">
+                SAYA MENGERTI
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- Logika Aplikasi (JavaScript) -->
+<script type="module">
+    // --- FIREBASE IMPORTS ---
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+    import { 
+        getAuth, 
+        signInAnonymously, 
+        signInWithCustomToken, 
+        onAuthStateChanged, 
+        createUserWithEmailAndPassword, 
+        signInWithEmailAndPassword, 
+        signOut 
+    } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+    import { 
+        getFirestore, 
+        doc, 
+        setDoc, 
+        getDoc, 
+        addDoc, 
+        collection, 
+        query, 
+        where, 
+        onSnapshot, 
+        serverTimestamp,
+        updateDoc,
+        getDocs,
+        deleteDoc
+    } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+    import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+    // Set level log untuk debugging (penting untuk pengembangan)
+    setLogLevel('Debug');
+
+    // --- VARIABEL GLOBAL DARI LINGKUNGAN CANVAS ---
+    const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+    const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : { /* Fallback config */ };
+    const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+    // --- INISIALISASI FIREBASE ---
+    let app, db, auth;
+    let currentUserId = null;
+    let isAdmin = false;
+    const ADMIN_EMAIL = 'admin@rt.com'; // Admin ditentukan oleh email ini
+
+    try {
+        app = initializeApp(firebaseConfig);
+        db = getFirestore(app);
+        auth = getAuth(app);
+        console.log("Firebase diinisialisasi.");
+
+        // Otentikasi awal
+        if (initialAuthToken) {
+            signInWithCustomToken(auth, initialAuthToken).catch(err => {
+                console.error("Gagal signInWithCustomToken:", err);
+                signInAnonymously(auth); // Fallback ke anonim
+            });
+        } else {
+            signInAnonymously(auth); // Jika tidak ada token, gunakan anonim
+        }
+    } catch (error) {
+        console.error("Kesalahan saat inisialisasi Firebase:", error);
+    }
+
+    // --- HELPER FUNKTION ---
+    const showView = (viewId) => {
+        const views = ['auth-page', 'client-dashboard', 'admin-dashboard', 'loading-screen'];
+        views.forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.classList.add('hidden');
+        });
+        const targetView = document.getElementById(viewId);
+        if (targetView) targetView.classList.remove('hidden');
+
+        // Tampilkan/sembunyikan header
+        const header = document.getElementById('header');
+        if (viewId === 'client-dashboard' || viewId === 'admin-dashboard') {
+            header.classList.remove('hidden');
+        } else {
+            header.classList.add('hidden');
+        }
+    };
+
+    // Fungsi untuk mendapatkan path koleksi Firestore (mengikuti aturan keamanan)
+    const getResidentDocRef = (uid) => doc(db, 'artifacts', appId, 'public/data', 'residents', uid);
+    const getAnnouncementColRef = () => collection(db, 'artifacts', appId, 'public/data', 'announcements');
+    const getDuesLedgerColRef = () => collection(db, 'artifacts', appId, 'public/data', 'dues_ledger');
+    const getPanicDocRef = () => doc(db, 'artifacts', appId, 'public/data', 'system_status', 'panic');
+    
+    // Path khusus untuk data pribadi (Pengaduan & Status Iuran Pribadi)
+    const getPrivateCollectionRef = (userId, collectionName) => collection(db, 'artifacts', appId, 'users', userId, collectionName);
+
+    // --- AUTENTIKASI DAN RENDER UI ---
+    onAuthStateChanged(auth, async (user) => {
+        if (user) {
+            currentUserId = user.uid;
+            
+            // Cek apakah user adalah Admin
+            isAdmin = user.email === ADMIN_EMAIL;
+            document.getElementById('user-role').textContent = isAdmin ? '(Admin)' : '(Warga)';
+
+            // Jika anonim, paksa ke halaman login
+            if (user.isAnonymous) {
+                renderAuthPage('login');
+                showView('auth-page');
+            } else {
+                // User sudah login, tentukan dashboard
+                if (isAdmin) {
+                    await renderAdminDashboard();
+                    showView('admin-dashboard');
+                } else {
+                    await renderClientDashboard();
+                    showView('client-dashboard');
+                }
+            }
+
+            // Inisialisasi listener global (Panic Button)
+            setupPanicListener();
+
+        } else {
+            currentUserId = null;
+            isAdmin = false;
+            renderAuthPage('login');
+            showView('auth-page');
+        }
+        // Hapus loading screen
+        document.getElementById('loading-screen').classList.add('hidden');
+    });
+
+    document.getElementById('logout-button').addEventListener('click', async () => {
+        try {
+            await signOut(auth);
+            console.log("Logout berhasil.");
+        } catch (error) {
+            console.error("Gagal logout:", error);
+        }
+    });
+
+    // --- RENDER HALAMAN AUTENTIKASI ---
+    const renderAuthPage = (mode = 'login') => {
+        const authPage = document.getElementById('auth-page');
+        if (mode === 'login') {
+            authPage.innerHTML = `
+                <div class="max-w-md mx-auto bg-white p-8 rounded-xl shadow-2xl border border-gray-100">
+                    <h2 class="text-3xl font-bold text-center text-blue-600 mb-6">Login Warga / Admin</h2>
+                    <form id="login-form" class="space-y-4">
+                        <div>
+                            <label for="login-email" class="block text-sm font-medium text-gray-700">Email</label>
+                            <input type="email" id="login-email" class="mt-1 block w-full px-4 py-2 border border-gray-300 rounded-lg shadow-sm focus:ring-blue-500 focus:border-blue-500" required>
+                        </div>
+                        <div>
+                            <label for="login-password" class="block text-sm font-medium text-gray-700">Password</label>
+                            <input type="password" id="login-password" class="mt-1 block w-full px-4 py-2 border border-gray-300 rounded-lg shadow-sm focus:ring-blue-500 focus:border-blue-500" required>
+                        </div>
+                        <button type="submit" class="w-full flex items-center justify-center bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded-lg shadow-md transition duration-150">
+                            <i data-lucide="log-in" class="w-5 h-5 mr-2"></i> Masuk
+                        </button>
+                        <p class="text-center text-sm mt-4 text-gray-600">
+                            Belum punya akun? 
+                            <a href="#" id="show-register" class="text-blue-600 hover:text-blue-800 font-medium">Daftar Sekarang</a>
+                        </p>
+                        <div id="login-message" class="text-red-500 text-center mt-3 text-sm"></div>
+                    </form>
+                </div>
+            `;
+            document.getElementById('login-form').addEventListener('submit', handleLogin);
+            document.getElementById('show-register').addEventListener('click', (e) => { e.preventDefault(); renderAuthPage('register'); });
+        } else { // Register Mode
+            authPage.innerHTML = `
+                <div class="max-w-xl mx-auto bg-white p-8 rounded-xl shadow-2xl border border-gray-100">
+                    <h2 class="text-3xl font-bold text-center text-blue-600 mb-6">Pendaftaran Akun Warga</h2>
+                    <p class="text-center text-sm text-gray-500 mb-6">Mohon lengkapi data untuk aktivasi akun warga perumahan.</p>
+                    <form id="register-form" class="space-y-4">
+                        <div>
+                            <label for="reg-name" class="block text-sm font-medium text-gray-700">Nama Lengkap</label>
+                            <input type="text" id="reg-name" class="mt-1 block w-full px-4 py-2 border border-gray-300 rounded-lg shadow-sm focus:ring-blue-500 focus:border-blue-500" required>
+                        </div>
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <div>
+                                <label for="reg-blok" class="block text-sm font-medium text-gray-700">Blok Rumah</label>
+                                <input type="text" id="reg-blok" class="mt-1 block w-full px-4 py-2 border border-gray-300 rounded-lg shadow-sm focus:ring-blue-500 focus:border-blue-500" placeholder="Contoh: A" required>
+                            </div>
+                            <div>
+                                <label for="reg-no-rumah" class="block text-sm font-medium text-gray-700">No. Rumah</label>
+                                <input type="text" id="reg-no-rumah" class="mt-1 block w-full px-4 py-2 border border-gray-300 rounded-lg shadow-sm focus:ring-blue-500 focus:border-blue-500" placeholder="Contoh: 10" required>
+                            </div>
+                            <div>
+                                <label for="reg-phone" class="block text-sm font-medium text-gray-700">No. HP</label>
+                                <input type="tel" id="reg-phone" class="mt-1 block w-full px-4 py-2 border border-gray-300 rounded-lg shadow-sm focus:ring-blue-500 focus:border-blue-500" placeholder="Contoh: 0812..." required>
+                            </div>
+                        </div>
+                        <div>
+                            <label for="reg-kk1" class="block text-sm font-medium text-gray-700">No. KK Utama</label>
+                            <input type="text" id="reg-kk1" class="mt-1 block w-full px-4 py-2 border border-gray-300 rounded-lg shadow-sm focus:ring-blue-500 focus:border-blue-500" required>
+                        </div>
+                        <div>
+                            <label for="reg-kk2" class="block text-sm font-medium text-gray-700">No. KK Opsi 2 (Opsional)</label>
+                            <input type="text" id="reg-kk2" class="mt-1 block w-full px-4 py-2 border border-gray-300 rounded-lg shadow-sm focus:ring-blue-500 focus:border-blue-500">
+                        </div>
+                        <div>
+                            <label for="reg-email" class="block text-sm font-medium text-gray-700">Email (Untuk Login)</label>
+                            <input type="email" id="reg-email" class="mt-1 block w-full px-4 py-2 border border-gray-300 rounded-lg shadow-sm focus:ring-blue-500 focus:border-blue-500" required>
+                        </div>
+                        <div>
+                            <label for="reg-password" class="block text-sm font-medium text-gray-700">Password (Min. 6 Karakter)</label>
+                            <input type="password" id="reg-password" class="mt-1 block w-full px-4 py-2 border border-gray-300 rounded-lg shadow-sm focus:ring-blue-500 focus:border-blue-500" required>
+                        </div>
+                        <button type="submit" class="w-full flex items-center justify-center bg-green-600 hover:bg-green-700 text-white font-semibold py-2 px-4 rounded-lg shadow-md transition duration-150">
+                            <i data-lucide="user-plus" class="w-5 h-5 mr-2"></i> Daftar Akun
+                        </button>
+                        <p class="text-center text-sm mt-4 text-gray-600">
+                            Sudah punya akun? 
+                            <a href="#" id="show-login" class="text-blue-600 hover:text-blue-800 font-medium">Masuk Sekarang</a>
+                        </p>
+                        <div id="register-message" class="text-red-500 text-center mt-3 text-sm"></div>
+                    </form>
+                </div>
+            `;
+            document.getElementById('register-form').addEventListener('submit', handleRegister);
+            document.getElementById('show-login').addEventListener('click', (e) => { e.preventDefault(); renderAuthPage('login'); });
+        }
+        // Pastikan ikon diload setelah innerHTML di-set
+        lucide.createIcons();
+    };
+
+    const handleLogin = async (e) => {
+        e.preventDefault();
+        const email = document.getElementById('login-email').value;
+        const password = document.getElementById('login-password').value;
+        const msgEl = document.getElementById('login-message');
+        msgEl.textContent = 'Memproses...';
+
+        try {
+            await signInWithEmailAndPassword(auth, email, password);
+            msgEl.textContent = 'Login berhasil. Mengalihkan...';
+        } catch (error) {
+            console.error("Login Gagal:", error);
+            msgEl.textContent = `Login Gagal: ${error.message.includes('wrong-password') ? 'Password salah.' : error.message.includes('user-not-found') ? 'Email tidak terdaftar.' : 'Terjadi kesalahan.'}`;
+        }
+    };
+
+    const handleRegister = async (e) => {
+        e.preventDefault();
+        const msgEl = document.getElementById('register-message');
+        msgEl.textContent = 'Memproses pendaftaran...';
+
+        const name = document.getElementById('reg-name').value;
+        const email = document.getElementById('reg-email').value;
+        const password = document.getElementById('reg-password').value;
+        const blok = document.getElementById('reg-blok').value.toUpperCase();
+        const noRumah = document.getElementById('reg-no-rumah').value;
+        const phone = document.getElementById('reg-phone').value;
+        const kk1 = document.getElementById('reg-kk1').value;
+        const kk2 = document.getElementById('reg-kk2').value;
+
+        try {
+            const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+            const user = userCredential.user;
+
+            // Simpan data warga ke Firestore (Public data untuk memudahkan Admin)
+            await setDoc(getResidentDocRef(user.uid), {
+                uid: user.uid,
+                nama: name,
+                email: email,
+                blok_rumah: blok,
+                no_rumah: noRumah,
+                alamat_lengkap: `${blok}/${noRumah}`,
+                no_hp: phone,
+                no_kk: [kk1, kk2].filter(Boolean),
+                registered_at: serverTimestamp()
+            });
+
+            msgEl.textContent = 'Pendaftaran berhasil! Silakan masuk.';
+            renderAuthPage('login'); // Langsung alihkan ke halaman login
+        } catch (error) {
+            console.error("Pendaftaran Gagal:", error);
+            msgEl.textContent = `Pendaftaran Gagal: ${error.message.includes('email-already-in-use') ? 'Email sudah terdaftar.' : 'Terjadi kesalahan. Coba lagi.'}`;
+        }
+    };
+
+    // --- LOGIKA PANIC BUTTON (GLOBAL) ---
+
+    // Listener untuk menampilkan modal panic button secara global
+    const setupPanicListener = () => {
+        const panicDocRef = getPanicDocRef();
+        onSnapshot(panicDocRef, (docSnap) => {
+            const panicModal = document.getElementById('panic-modal');
+            const panicMessage = document.getElementById('panic-message');
+
+            if (docSnap.exists() && docSnap.data().status === 'ACTIVE') {
+                const data = docSnap.data();
+                const callerInfo = data.callerName || 'Seorang Warga';
+                const message = data.message || 'Situasi darurat terdeteksi.';
+                
+                panicMessage.innerHTML = `<span class="font-semibold">${callerInfo}</span> memicu tombol darurat.<br>${message}`;
+                panicModal.classList.remove('hidden');
+                // Tambahkan suara darurat (opsional, tergantung dukungan browser)
+                // new Audio('path/to/alarm.mp3').play();
+            } else {
+                panicModal.classList.add('hidden');
+            }
+        }, (error) => {
+            console.error("Gagal mendengarkan status panic:", error);
+        });
+    };
+    
+    // Pemicu Panic Button dari sisi Client
+    const triggerPanic = async () => {
+        const confirmDialog = (title, message) => new Promise(resolve => {
+            const modalHtml = `
+                <div id="custom-confirm-modal" class="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
+                    <div class="bg-white rounded-xl shadow-2xl p-6 w-full max-w-sm">
+                        <h3 class="text-xl font-bold text-red-600 mb-3">${title}</h3>
+                        <p class="text-gray-700 mb-6">${message}</p>
+                        <div class="flex justify-end space-x-3">
+                            <button id="btn-cancel" class="bg-gray-200 hover:bg-gray-300 text-gray-800 font-medium py-2 px-4 rounded-lg">Batal</button>
+                            <button id="btn-confirm" class="bg-red-600 hover:bg-red-700 text-white font-medium py-2 px-4 rounded-lg">Ya, Panggil</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+            document.body.insertAdjacentHTML('beforeend', modalHtml);
+            const modal = document.getElementById('custom-confirm-modal');
+            
+            document.getElementById('btn-confirm').onclick = () => { modal.remove(); resolve(true); };
+            document.getElementById('btn-cancel').onclick = () => { modal.remove(); resolve(false); };
+            modal.onclick = (e) => { if (e.target.id === 'custom-confirm-modal') { modal.remove(); resolve(false); } };
+        });
+
+        const confirmed = await confirmDialog(
+            "Konfirmasi Darurat",
+            "Anda yakin ingin memicu tombol darurat? Tindakan ini akan mengirim notifikasi darurat ke semua warga dan admin."
+        );
+
+        if (confirmed) {
+            try {
+                const residentSnap = await getDoc(getResidentDocRef(currentUserId));
+                const residentData = residentSnap.exists() ? residentSnap.data() : { nama: 'Warga Tak Dikenal', alamat_lengkap: 'Lokasi Tidak Diketahui' };
+
+                await setDoc(getPanicDocRef(), {
+                    status: 'ACTIVE',
+                    callerId: currentUserId,
+                    callerName: residentData.nama,
+                    location: residentData.alamat_lengkap,
+                    message: 'Mohon segera diperiksa, ada panggilan darurat.',
+                    timestamp: serverTimestamp()
+                }, { merge: true });
+
+                alertMessage("Darurat Dipicu!", "Notifikasi darurat telah dikirim ke semua warga dan admin. Bantuan akan segera datang.", 'success');
+            } catch (error) {
+                console.error("Gagal memicu panic button:", error);
+                alertMessage("Gagal", "Terjadi kesalahan saat memicu darurat.", 'error');
+            }
+        }
+    };
+    
+    // Clear Panic Button dari sisi Admin
+    const clearPanic = async () => {
+        try {
+            await setDoc(getPanicDocRef(), { 
+                status: 'INACTIVE', 
+                callerId: null, 
+                callerName: null,
+                location: null,
+                message: null,
+                timestamp: serverTimestamp() 
+            });
+            alertMessage("Status Darurat Dihapus", "Notifikasi darurat telah diakhiri.", 'success');
+        } catch (error) {
+            console.error("Gagal clear panic:", error);
+            alertMessage("Gagal", "Terjadi kesalahan saat menghapus status darurat.", 'error');
+        }
+    };
+
+    // --- MODAL ALERT KUSTOM (Pengganti window.alert) ---
+    const alertMessage = (title, message, type = 'info') => {
+        const typeClasses = {
+            'info': { icon: 'info', color: 'blue' },
+            'success': { icon: 'check-circle', color: 'green' },
+            'error': { icon: 'x-octagon', color: 'red' }
+        };
+        const { icon, color } = typeClasses[type];
+
+        const modalHtml = `
+            <div id="custom-alert-modal" class="fixed inset-0 bg-black bg-opacity-50 z-[9999] flex items-center justify-center p-4">
+                <div class="bg-white rounded-xl shadow-2xl p-6 w-full max-w-sm">
+                    <div class="flex items-center space-x-3 mb-3">
+                        <i data-lucide="${icon}" class="w-6 h-6 text-${color}-600"></i>
+                        <h3 class="text-xl font-bold text-${color}-600">${title}</h3>
+                    </div>
+                    <p class="text-gray-700 mb-6">${message}</p>
+                    <div class="flex justify-end">
+                        <button id="btn-ok" class="bg-${color}-600 hover:bg-${color}-700 text-white font-medium py-2 px-4 rounded-lg">OK</button>
+                    </div>
+                </div>
+            </div>
+        `;
+        document.body.insertAdjacentHTML('beforeend', modalHtml);
+        lucide.createIcons();
+        
+        const modal = document.getElementById('custom-alert-modal');
+        document.getElementById('btn-ok').onclick = () => modal.remove();
+        modal.onclick = (e) => { if (e.target.id === 'custom-alert-modal') { modal.remove(); } };
+    };
+
+    // --- DASHBOARD WARGA (CLIENT) ---
+
+    const renderClientDashboard = async () => {
+        const clientDashboard = document.getElementById('client-dashboard');
+        
+        // 1. Ambil data profil warga
+        const residentSnap = await getDoc(getResidentDocRef(currentUserId));
+        const residentData = residentSnap.exists() ? residentSnap.data() : { nama: 'Warga', alamat_lengkap: 'Blok/Nomor' };
+
+        // 2. Render struktur dasar dashboard
+        clientDashboard.innerHTML = `
+            <h2 class="text-3xl font-bold text-gray-800 mb-6">Dashboard Warga</h2>
+            
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <!-- Kolom Kiri: Profil & Info Cepat -->
+                <div class="lg:col-span-1 space-y-6">
+                    <!-- Profil Warga -->
+                    <div class="bg-white p-6 rounded-xl shadow-lg border border-gray-100">
+                        <h3 class="text-xl font-semibold mb-3 flex items-center"><i data-lucide="user" class="w-5 h-5 mr-2 text-blue-500"></i> Profil Saya</h3>
+                        <p class="text-2xl font-bold text-gray-800">${residentData.nama}</p>
+                        <p class="text-sm text-gray-500 mb-4">${residentData.email}</p>
+                        <ul class="space-y-2 text-sm">
+                            <li class="flex justify-between border-b pb-1"><span>Alamat:</span> <span class="font-medium">${residentData.alamat_lengkap}</span></li>
+                            <li class="flex justify-between border-b pb-1"><span>No. HP:</span> <span class="font-medium">${residentData.no_hp || '-'}</span></li>
+                            <li class="flex justify-between"><span>ID User:</span> <span class="font-mono text-xs">${currentUserId}</span></li>
+                        </ul>
+                    </div>
+
+                    <!-- Info Terbaru Pengumuman -->
+                    <div class="bg-white p-6 rounded-xl shadow-lg border border-gray-100">
+                        <h3 class="text-xl font-semibold mb-4 flex items-center"><i data-lucide="megaphone" class="w-5 h-5 mr-2 text-green-500"></i> Info Terbaru</h3>
+                        <div id="latest-announcements-list" class="space-y-3">
+                            <p class="text-gray-500 text-sm">Memuat pengumuman...</p>
+                        </div>
+                    </div>
+
+                    <!-- Tombol Panic Button -->
+                    <div class="bg-red-100 p-6 rounded-xl shadow-lg border border-red-300 text-center">
+                        <button id="client-panic-button" class="w-full bg-red-600 hover:bg-red-700 text-white font-extrabold text-lg py-4 rounded-xl shadow-xl transition transform hover:scale-[1.01] active:scale-95 duration-200">
+                            <i data-lucide="siren" class="w-6 h-6 mr-2 inline"></i> PANIC BUTTON (EMERGENCY)
+                        </button>
+                        <p class="text-xs text-red-500 mt-2">Gunakan hanya dalam keadaan darurat (kriminal, kebakaran, dll.).</p>
+                    </div>
+
+                </div>
+
+                <!-- Kolom Kanan: Menu Layanan Utama -->
+                <div class="lg:col-span-2">
+                    <h3 class="text-2xl font-bold text-gray-800 mb-4">Layanan Utama</h3>
+                    <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                        <!-- Menu 1: Pengaduan -->
+                        ${renderClientMenuCard('Pengaduan', 'Tulis keluhan/masukan pribadi', 'mail-open', 'blue', 'show-pengaduan')}
+                        <!-- Menu 2: Pengumuman -->
+                        ${renderClientMenuCard('Pengumuman', 'Lihat semua info & notifikasi', 'bell', 'green', 'show-pengumuman')}
+                        <!-- Menu 3: Iuran / Kas -->
+                        ${renderClientMenuCard('Iuran / Kas', 'Monitor iuran & saldo kas', 'wallet', 'yellow', 'show-iuran')}
+                        <!-- Menu 4: Kontak Pengurus -->
+                        ${renderClientMenuCard('Kontak Pengurus', 'Hubungi admin via WhatsApp', 'message-circle', 'purple', 'kontak-admin-whatsapp')}
+                    </div>
+
+                    <div id="client-detail-view" class="mt-8 bg-white p-6 rounded-xl shadow-2xl border border-gray-100 min-h-[400px]">
+                        <p class="text-center text-gray-500">Silakan pilih menu layanan di atas.</p>
+                    </div>
+                </div>
+            </div>
+        `;
+        lucide.createIcons();
+        
+        // Setup Listeners
+        document.getElementById('client-panic-button').addEventListener('click', triggerPanic);
+        document.getElementById('show-pengaduan').addEventListener('click', () => renderClientDetailView('pengaduan'));
+        document.getElementById('show-pengumuman').addEventListener('click', () => renderClientDetailView('pengumuman'));
+        document.getElementById('show-iuran').addEventListener('click', () => renderClientDetailView('iuran'));
+        document.getElementById('kontak-admin-whatsapp').addEventListener('click', () => {
+             // Ganti dengan nomor WhatsApp Admin yang sebenarnya
+            const adminWhatsapp = '6281234567890'; 
+            window.open(`https://wa.me/${adminWhatsapp}?text=Halo%20Admin%2C%20saya%20warga%20${residentData.alamat_lengkap}.%20Mau%20bertanya%20tentang...`, '_blank');
+        });
+
+        // Load data in background
+        loadLatestAnnouncements();
+        
+    };
+
+    const renderClientMenuCard = (title, description, icon, color, id) => `
+        <div id="${id}" class="card-menu bg-white p-4 rounded-xl shadow-lg border-t-4 border-${color}-500 cursor-pointer text-center">
+            <i data-lucide="${icon}" class="w-8 h-8 text-${color}-600 mx-auto mb-2"></i>
+            <h4 class="text-md font-bold text-gray-800">${title}</h4>
+            <p class="text-xs text-gray-500">${description}</p>
+        </div>
+    `;
+
+    // --- LOGIKA CLIENT DETAIL VIEWS ---
+
+    const renderClientDetailView = (view) => {
+        const detailView = document.getElementById('client-detail-view');
+        detailView.innerHTML = `<div class="p-4 text-center text-gray-500"><div class="loading-spinner mx-auto"></div> Memuat data...</div>`;
+        
+        switch (view) {
+            case 'pengaduan':
+                detailView.innerHTML = renderPengaduanForm();
+                setupPengaduanListener(detailView);
+                break;
+            case 'pengumuman':
+                detailView.innerHTML = renderAllAnnouncementsView();
+                loadAllAnnouncements(detailView);
+                break;
+            case 'iuran':
+                detailView.innerHTML = renderIuranClientView();
+                loadClientDuesStatus(detailView);
+                break;
+        }
+        lucide.createIcons();
+    };
+
+    // Sub-view: Pengaduan (Client)
+    const renderPengaduanForm = () => `
+        <h3 class="text-2xl font-bold text-blue-600 mb-4">Ajukan Pengaduan Pribadi</h3>
+        <p class="text-sm text-gray-500 mb-4">Pengaduan ini hanya terlihat oleh Anda dan Admin.</p>
+        
+        <form id="pengaduan-form" class="space-y-4 mb-8">
+            <div>
+                <label for="aduan-subject" class="block text-sm font-medium text-gray-700">Judul Pengaduan</label>
+                <input type="text" id="aduan-subject" class="mt-1 block w-full px-4 py-2 border border-gray-300 rounded-lg shadow-sm" required>
+            </div>
+            <div>
+                <label for="aduan-content" class="block text-sm font-medium text-gray-700">Isi Pengaduan</label>
+                <textarea id="aduan-content" rows="4" class="mt-1 block w-full px-4 py-2 border border-gray-300 rounded-lg shadow-sm" required></textarea>
+            </div>
+            <button type="submit" class="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded-lg flex items-center">
+                <i data-lucide="send" class="w-5 h-5 mr-2"></i> Kirim Pengaduan
+            </button>
+            <p id="aduan-message" class="text-sm"></p>
+        </form>
+
+        <h3 class="text-xl font-bold text-gray-800 mb-4 border-t pt-4">Riwayat Pengaduan Saya</h3>
+        <div id="pengaduan-list-private" class="space-y-3">
+            <p class="text-gray-500">Memuat riwayat...</p>
+        </div>
+    `;
+
+    const handlePengaduanSubmit = async (e) => {
+        e.preventDefault();
+        const subject = document.getElementById('aduan-subject').value;
+        const content = document.getElementById('aduan-content').value;
+        const msgEl = document.getElementById('aduan-message');
+        
+        const residentSnap = await getDoc(getResidentDocRef(currentUserId));
+        const residentData = residentSnap.exists() ? residentSnap.data() : {};
+
+        try {
+            await addDoc(getPrivateCollectionRef(currentUserId, 'complaints'), {
+                subject,
+                content,
+                status: 'Baru', // Status: Baru, Diproses, Selesai
+                reporterId: currentUserId,
+                reporterAddress: residentData.alamat_lengkap,
+                reporterName: residentData.nama,
+                timestamp: serverTimestamp()
+            });
+
+            msgEl.textContent = 'Pengaduan berhasil dikirim!';
+            msgEl.classList.remove('text-red-500');
+            msgEl.classList.add('text-green-600');
+            document.getElementById('pengaduan-form').reset();
+        } catch (error) {
+            console.error("Gagal mengirim pengaduan:", error);
+            msgEl.textContent = 'Gagal mengirim pengaduan. Coba lagi.';
+            msgEl.classList.remove('text-green-600');
+            msgEl.classList.add('text-red-500');
+        }
+    };
+
+    const setupPengaduanListener = (parentEl) => {
+        const aduanList = parentEl.querySelector('#pengaduan-list-private');
+        parentEl.querySelector('#pengaduan-form').addEventListener('submit', handlePengaduanSubmit);
+
+        onSnapshot(query(getPrivateCollectionRef(currentUserId, 'complaints')), (snapshot) => {
+            let html = '';
+            if (snapshot.empty) {
+                html = '<p class="text-gray-500">Belum ada riwayat pengaduan.</p>';
+            } else {
+                snapshot.docs.sort((a, b) => b.data().timestamp?.toMillis() - a.data().timestamp?.toMillis()).forEach(doc => {
+                    const data = doc.data();
+                    const statusColor = data.status === 'Selesai' ? 'bg-green-100 text-green-700' : data.status === 'Diproses' ? 'bg-yellow-100 text-yellow-700' : 'bg-red-100 text-red-700';
+                    const formattedDate = data.timestamp ? new Date(data.timestamp.seconds * 1000).toLocaleDateString('id-ID') : 'N/A';
+                    
+                    html += `
+                        <div class="p-4 bg-gray-50 rounded-lg border border-gray-200">
+                            <div class="flex justify-between items-center mb-2">
+                                <span class="font-semibold text-gray-800">${data.subject}</span>
+                                <span class="text-xs font-medium ${statusColor} py-1 px-3 rounded-full">${data.status}</span>
+                            </div>
+                            <p class="text-sm text-gray-600">${data.content.substring(0, 100)}...</p>
+                            <p class="text-xs text-gray-400 mt-2">Diajukan: ${formattedDate}</p>
+                        </div>
+                    `;
+                });
+            }
+            aduanList.innerHTML = html;
+        }, (error) => {
+            aduanList.innerHTML = `<p class="text-red-500">Gagal memuat pengaduan: ${error.message}</p>`;
+            console.error("Error fetching private complaints:", error);
+        });
+    };
+
+    // Sub-view: Pengumuman (Client)
+    const renderAllAnnouncementsView = () => `
+        <h3 class="text-2xl font-bold text-green-600 mb-4">Semua Pengumuman Warga</h3>
+        <div id="all-announcements-list" class="space-y-4">
+            <p class="text-gray-500">Memuat semua pengumuman...</p>
+        </div>
+    `;
+
+    const loadAllAnnouncements = (parentEl) => {
+        const listEl = parentEl.querySelector('#all-announcements-list');
+        onSnapshot(query(getAnnouncementColRef()), (snapshot) => {
+            let html = '';
+            if (snapshot.empty) {
+                html = '<p class="text-gray-500">Belum ada pengumuman saat ini.</p>';
+            } else {
+                snapshot.docs.sort((a, b) => b.data().timestamp?.toMillis() - a.data().timestamp?.toMillis()).forEach(doc => {
+                    const data = doc.data();
+                    const formattedDate = data.timestamp ? new Date(data.timestamp.seconds * 1000).toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' }) : 'N/A';
+                    
+                    html += `
+                        <div class="p-4 bg-white rounded-lg shadow border border-gray-100">
+                            <h4 class="text-lg font-bold text-gray-800">${data.title}</h4>
+                            <p class="text-sm text-gray-600 mt-1">${data.content}</p>
+                            <p class="text-xs text-gray-400 mt-2">Diumumkan pada: ${formattedDate}</p>
+                        </div>
+                    `;
+                });
+            }
+            listEl.innerHTML = html;
+        }, (error) => {
+            listEl.innerHTML = `<p class="text-red-500">Gagal memuat pengumuman: ${error.message}</p>`;
+            console.error("Error fetching all announcements:", error);
+        });
+    };
+
+    const loadLatestAnnouncements = () => {
+        const listEl = document.getElementById('latest-announcements-list');
+        if (!listEl) return;
+
+        onSnapshot(query(getAnnouncementColRef()), (snapshot) => {
+            let html = '';
+            if (snapshot.empty) {
+                html = '<p class="text-gray-500 text-sm">Tidak ada pengumuman terbaru.</p>';
+            } else {
+                snapshot.docs
+                    .sort((a, b) => b.data().timestamp?.toMillis() - a.data().timestamp?.toMillis())
+                    .slice(0, 2) // Ambil 2 terbaru
+                    .forEach(doc => {
+                        const data = doc.data();
+                        const formattedDate = data.timestamp ? new Date(data.timestamp.seconds * 1000).toLocaleDateString('id-ID') : 'N/A';
+                        
+                        html += `
+                            <div class="border-b pb-2">
+                                <h4 class="font-medium text-gray-800">${data.title}</h4>
+                                <p class="text-xs text-gray-600">${data.content.substring(0, 50)}...</p>
+                                <span class="text-xs text-gray-400">${formattedDate}</span>
+                            </div>
+                        `;
+                    });
+            }
+            listEl.innerHTML = html;
+        }, (error) => {
+            listEl.innerHTML = `<p class="text-red-500">Gagal memuat info terbaru.</p>`;
+            console.error("Error fetching latest announcements:", error);
+        });
+    };
+
+    // Sub-view: Iuran / Kas (Client)
+    const renderIuranClientView = () => `
+        <h3 class="text-2xl font-bold text-yellow-600 mb-4">Monitoring Iuran & Kas</h3>
+        
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+            <div class="bg-blue-50 p-4 rounded-lg shadow-inner border border-blue-200">
+                <p class="text-sm text-blue-700 font-medium">Total Saldo Kas RT Saat Ini</p>
+                <p id="total-kas-client" class="text-3xl font-bold text-blue-800">Rp 0</p>
+            </div>
+            <div class="bg-yellow-50 p-4 rounded-lg shadow-inner border border-yellow-200">
+                <p class="text-sm text-yellow-700 font-medium">Status Tunggakan Anda</p>
+                <p id="dues-tunggakan-status" class="text-xl font-bold text-yellow-800">Memuat...</p>
+            </div>
+        </div>
+
+        <h4 class="text-xl font-bold text-gray-800 mb-3 border-t pt-4">Riwayat Pembayaran Saya</h4>
+        <div id="client-dues-history" class="overflow-x-auto">
+            <table class="min-w-full bg-white rounded-lg shadow-md">
+                <thead>
+                    <tr class="bg-gray-200 text-gray-600 uppercase text-sm leading-normal">
+                        <th class="py-3 px-6 text-left">Bulan / Tahun</th>
+                        <th class="py-3 px-6 text-center">Nominal (Rp)</th>
+                        <th class="py-3 px-6 text-center">Status</th>
+                    </tr>
+                </thead>
+                <tbody id="client-dues-history-body" class="text-gray-600 text-sm font-light">
+                    <tr><td colspan="3" class="text-center py-4">Memuat data iuran...</td></tr>
+                </tbody>
+            </table>
+        </div>
+    `;
+
+    const loadClientDuesStatus = (parentEl) => {
+        const totalKasEl = parentEl.querySelector('#total-kas-client');
+        const tunggakanEl = parentEl.querySelector('#dues-tunggakan-status');
+        const historyBodyEl = parentEl.querySelector('#client-dues-history-body');
+
+        // 1. Dapatkan Total Kas (dari Admin Ledger, hanya ambil total saldo)
+        // Kita asumsikan ada satu dokumen 'summary' di 'dues_ledger'
+        onSnapshot(doc(db, 'artifacts', appId, 'public/data', 'dues_ledger', 'summary'), (docSnap) => {
+            if (docSnap.exists()) {
+                const totalKas = docSnap.data().totalKas || 0;
+                totalKasEl.textContent = `Rp ${totalKas.toLocaleString('id-ID')}`;
+            } else {
+                totalKasEl.textContent = 'Rp 0 (Belum ada data)';
+            }
+        }, (error) => {
+            console.error("Gagal memuat total kas:", error);
+            totalKasEl.textContent = 'Gagal memuat';
+        });
+
+        // 2. Dapatkan Riwayat Pembayaran Pribadi (Status Tunggakan)
+        onSnapshot(query(getPrivateCollectionRef(currentUserId, 'dues_status')), (snapshot) => {
+            let html = '';
+            let tunggakanCount = 0;
+            const today = new Date();
+            const currentMonthYear = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
+            let isCurrentMonthPaid = false;
+
+            const allDues = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            
+            // Sortir berdasarkan Bulan/Tahun (ID)
+            allDues.sort((a, b) => b.id.localeCompare(a.id));
+
+            allDues.forEach(data => {
+                const isPaid = data.status === 'Lunas';
+                if (!isPaid) tunggakanCount++;
+                if (data.id === currentMonthYear && isPaid) isCurrentMonthPaid = true;
+
+                const statusColor = isPaid ? 'bg-green-200 text-green-800' : 'bg-red-200 text-red-800';
+                
+                html += `
+                    <tr class="border-b border-gray-200 hover:bg-gray-100">
+                        <td class="py-3 px-6 text-left whitespace-nowrap">${data.id.replace('-', '/')}</td>
+                        <td class="py-3 px-6 text-center">${(data.amount || 50000).toLocaleString('id-ID')}</td>
+                        <td class="py-3 px-6 text-center">
+                            <span class="${statusColor} py-1 px-3 rounded-full text-xs font-semibold">${data.status}</span>
+                        </td>
+                    </tr>
+                `;
+            });
+            
+            historyBodyEl.innerHTML = html || `<tr><td colspan="3" class="text-center py-4">Belum ada riwayat pembayaran.</td></tr>`;
+
+            // Update status tunggakan
+            let tunggakanText = '';
+            if (tunggakanCount > 0) {
+                tunggakanText = `${tunggakanCount} Bulan Tunggakan!`;
+                tunggakanEl.classList.add('text-red-600');
+            } else if (isCurrentMonthPaid) {
+                tunggakanText = 'Lunas Bulan Ini!';
+                tunggakanEl.classList.add('text-green-600');
+            } else {
+                tunggakanText = 'Tidak Ada Tunggakan Sebelumnya. Bulan Ini Belum Bayar.';
+                tunggakanEl.classList.remove('text-red-600', 'text-green-600');
+                tunggakanEl.classList.add('text-gray-600');
+            }
+            tunggakanEl.textContent = tunggakanText;
+
+        }, (error) => {
+            historyBodyEl.innerHTML = `<tr><td colspan="3" class="text-center py-4 text-red-500">Gagal memuat riwayat iuran: ${error.message}</td></tr>`;
+            console.error("Error fetching client dues status:", error);
+        });
+    };
+    
+    // --- DASHBOARD ADMIN (PENGURUS) ---
+
+    const renderAdminDashboard = async () => {
+        const adminDashboard = document.getElementById('admin-dashboard');
+        
+        adminDashboard.innerHTML = `
+            <h2 class="text-3xl font-bold text-gray-800 mb-6 flex items-center"><i data-lucide="shield-check" class="w-7 h-7 mr-2 text-red-600"></i> Dashboard Admin</h2>
+            
+            <div class="grid grid-cols-1 md:grid-cols-5 gap-4 mb-8">
+                ${renderAdminMenuButton('Pengaduan', 'mail-open', 'blue', 'admin-show-pengaduan')}
+                ${renderAdminMenuButton('Pengumuman', 'megaphone', 'green', 'admin-show-pengumuman')}
+                ${renderAdminMenuButton('Iuran / Kas', 'wallet', 'yellow', 'admin-show-iuran')}
+                ${renderAdminMenuButton('Data Warga', 'users', 'purple', 'admin-show-warga')}
+                <div class="md:col-span-1">
+                    <button id="admin-clear-panic" class="w-full h-full bg-red-600 hover:bg-red-700 text-white font-medium py-3 px-4 rounded-xl shadow-lg transition duration-150 flex items-center justify-center text-sm">
+                        <i data-lucide="siren-off" class="w-5 h-5 mr-2"></i> Clear Panic
+                    </button>
+                </div>
+            </div>
+
+            <div id="admin-detail-view" class="bg-white p-6 rounded-xl shadow-2xl border border-gray-100 min-h-[500px]">
+                <p class="text-center text-gray-500">Silakan pilih menu Admin di atas.</p>
+            </div>
+        `;
+        lucide.createIcons();
+
+        // Setup Admin Listeners
+        document.getElementById('admin-show-pengaduan').addEventListener('click', () => renderAdminDetailView('pengaduan'));
+        document.getElementById('admin-show-pengumuman').addEventListener('click', () => renderAdminDetailView('pengumuman'));
+        document.getElementById('admin-show-iuran').addEventListener('click', () => renderAdminDetailView('iuran'));
+        document.getElementById('admin-show-warga').addEventListener('click', () => renderAdminDetailView('warga'));
+        document.getElementById('admin-clear-panic').addEventListener('click', clearPanic);
+    };
+
+    const renderAdminMenuButton = (title, icon, color, id) => `
+        <button id="${id}" class="w-full bg-white hover:bg-${color}-50 text-gray-800 font-medium py-3 px-4 rounded-xl shadow-md border-t-4 border-${color}-500 transition duration-150 flex items-center justify-center text-sm">
+            <i data-lucide="${icon}" class="w-5 h-5 mr-2 text-${color}-600"></i> ${title}
+        </button>
+    `;
+
+    const renderAdminDetailView = (view) => {
+        const detailView = document.getElementById('admin-detail-view');
+        detailView.innerHTML = `<div class="p-4 text-center text-gray-500"><div class="loading-spinner mx-auto"></div> Memuat data...</div>`;
+
+        switch (view) {
+            case 'pengaduan':
+                detailView.innerHTML = renderAdminPengaduanView();
+                loadAdminPengaduan(detailView);
+                break;
+            case 'pengumuman':
+                detailView.innerHTML = renderAdminPengumumanView();
+                loadAdminPengumuman(detailView);
+                break;
+            case 'iuran':
+                detailView.innerHTML = renderAdminIuranView();
+                loadAdminDuesSummary(detailView);
+                break;
+            case 'warga':
+                detailView.innerHTML = renderAdminWargaView();
+                loadAdminResidentData(detailView);
+                break;
+        }
+        lucide.createIcons();
+    };
+
+    // --- LOGIKA ADMIN DETAIL VIEWS ---
+
+    // View: Pengaduan (Admin)
+    const renderAdminPengaduanView = () => `
+        <h3 class="text-2xl font-bold text-blue-600 mb-4">Daftar Pengaduan Warga</h3>
+        <div id="admin-pengaduan-list" class="space-y-4">
+            <p class="text-gray-500">Memuat semua pengaduan...</p>
+        </div>
+    `;
+
+    const loadAdminPengaduan = async (parentEl) => {
+        const aduanListEl = parentEl.querySelector('#admin-pengaduan-list');
+        
+        // Admin perlu membaca dari semua subkoleksi 'complaints' di setiap user
+        // Karena Firestore tidak mendukung query across collections, kita harus mengumpulkan semua complaints dari semua users
+        
+        try {
+            const usersSnapshot = await getDocs(collection(db, 'artifacts', appId, 'public/data', 'residents'));
+            let allComplaints = [];
+
+            for (const userDoc of usersSnapshot.docs) {
+                const userId = userDoc.id;
+                const complaintsSnapshot = await getDocs(getPrivateCollectionRef(userId, 'complaints'));
+                
+                complaintsSnapshot.forEach(doc => {
+                    allComplaints.push({ id: doc.id, userId, ...doc.data() });
+                });
+            }
+
+            allComplaints.sort((a, b) => b.timestamp?.toMillis() - a.timestamp?.toMillis());
+            
+            let html = '';
+            if (allComplaints.length === 0) {
+                html = '<p class="text-gray-500">Tidak ada pengaduan baru saat ini.</p>';
+            } else {
+                allComplaints.forEach(aduan => {
+                    const statusColor = aduan.status === 'Selesai' ? 'bg-green-100 text-green-700' : aduan.status === 'Diproses' ? 'bg-yellow-100 text-yellow-700' : 'bg-red-100 text-red-700';
+                    const formattedDate = aduan.timestamp ? new Date(aduan.timestamp.seconds * 1000).toLocaleDateString('id-ID') : 'N/A';
+                    
+                    html += `
+                        <div class="p-4 bg-gray-50 rounded-lg shadow border border-gray-200" data-id="${aduan.id}" data-uid="${aduan.userId}">
+                            <div class="flex justify-between items-start mb-2">
+                                <div>
+                                    <h4 class="font-bold text-gray-800">${aduan.subject}</h4>
+                                    <p class="text-xs text-gray-600">Dari: ${aduan.reporterName || 'N/A'} (${aduan.reporterAddress || 'N/A'})</p>
+                                </div>
+                                <span class="text-sm font-medium ${statusColor} py-1 px-3 rounded-full">${aduan.status}</span>
+                            </div>
+                            <p class="text-sm text-gray-700 mt-1">${aduan.content}</p>
+                            <p class="text-xs text-gray-400 mt-2">Diajukan: ${formattedDate}</p>
+                            
+                            <div class="mt-3 pt-3 border-t flex space-x-2">
+                                <select class="aduan-status-select p-1 border rounded text-sm" data-aduan-id="${aduan.id}" data-user-id="${aduan.userId}">
+                                    <option value="Baru" ${aduan.status === 'Baru' ? 'selected' : ''}>Baru</option>
+                                    <option value="Diproses" ${aduan.status === 'Diproses' ? 'selected' : ''}>Diproses</option>
+                                    <option value="Selesai" ${aduan.status === 'Selesai' ? 'selected' : ''}>Selesai</option>
+                                </select>
+                            </div>
+                        </div>
+                    `;
+                });
+            }
+            aduanListEl.innerHTML = html;
+
+            aduanListEl.querySelectorAll('.aduan-status-select').forEach(select => {
+                select.addEventListener('change', (e) => updatePengaduanStatus(
+                    e.target.dataset.userId, 
+                    e.target.dataset.aduanId, 
+                    e.target.value
+                ));
+            });
+        } catch (error) {
+            console.error("Gagal memuat semua pengaduan:", error);
+            aduanListEl.innerHTML = `<p class="text-red-500">Gagal memuat data pengaduan: ${error.message}</p>`;
+        }
+    };
+    
+    const updatePengaduanStatus = async (userId, aduanId, newStatus) => {
+        try {
+            const docRef = doc(getPrivateCollectionRef(userId, 'complaints'), aduanId);
+            await updateDoc(docRef, { status: newStatus });
+            alertMessage("Status Diperbarui", `Pengaduan ID ${aduanId} diubah ke status: ${newStatus}`, 'success');
+            // Reload data (though onSnapshot in the previous func should handle this)
+        } catch (error) {
+            console.error("Gagal update status pengaduan:", error);
+            alertMessage("Gagal Update", `Tidak dapat memperbarui status: ${error.message}`, 'error');
+        }
+    };
+
+
+    // View: Pengumuman (Admin)
+    const renderAdminPengumumanView = () => `
+        <h3 class="text-2xl font-bold text-green-600 mb-4">Manajemen Pengumuman</h3>
+        
+        <div class="bg-gray-100 p-4 rounded-xl mb-6">
+            <h4 class="text-lg font-semibold mb-2">Buat Pengumuman Baru</h4>
+            <form id="admin-announcement-form" class="space-y-3">
+                <div>
+                    <input type="text" id="ann-title" class="w-full p-2 border rounded-lg" placeholder="Judul Pengumuman" required>
+                </div>
+                <div>
+                    <textarea id="ann-content" rows="3" class="w-full p-2 border rounded-lg" placeholder="Isi Pengumuman" required></textarea>
+                </div>
+                <button type="submit" class="bg-green-600 hover:bg-green-700 text-white font-medium py-2 px-4 rounded-lg flex items-center">
+                    <i data-lucide="send" class="w-5 h-5 mr-2"></i> Kirim Pengumuman
+                </button>
+            </form>
+        </div>
+
+        <h4 class="text-xl font-bold text-gray-800 mb-3 border-t pt-4">Daftar Pengumuman Aktif</h4>
+        <div id="admin-announcement-list" class="space-y-3">
+            <p class="text-gray-500">Memuat daftar pengumuman...</p>
+        </div>
+    `;
+
+    const handleAdminAnnouncementSubmit = async (e) => {
+        e.preventDefault();
+        const title = document.getElementById('ann-title').value;
+        const content = document.getElementById('ann-content').value;
+
+        try {
+            await addDoc(getAnnouncementColRef(), {
+                title,
+                content,
+                timestamp: serverTimestamp(),
+                adminId: currentUserId
+            });
+            alertMessage("Berhasil", "Pengumuman berhasil dipublikasikan!", 'success');
+            document.getElementById('admin-announcement-form').reset();
+        } catch (error) {
+            console.error("Gagal mengirim pengumuman:", error);
+            alertMessage("Gagal", `Tidak dapat mempublikasikan pengumuman: ${error.message}`, 'error');
+        }
+    };
+
+    const loadAdminPengumuman = (parentEl) => {
+        const listEl = parentEl.querySelector('#admin-announcement-list');
+        parentEl.querySelector('#admin-announcement-form').addEventListener('submit', handleAdminAnnouncementSubmit);
+
+        onSnapshot(query(getAnnouncementColRef()), (snapshot) => {
+            let html = '';
+            if (snapshot.empty) {
+                html = '<p class="text-gray-500">Belum ada pengumuman yang dibuat.</p>';
+            } else {
+                snapshot.docs.sort((a, b) => b.data().timestamp?.toMillis() - a.data().timestamp?.toMillis()).forEach(doc => {
+                    const data = doc.data();
+                    const formattedDate = data.timestamp ? new Date(data.timestamp.seconds * 1000).toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' }) : 'N/A';
+                    
+                    html += `
+                        <div class="p-4 bg-white rounded-lg shadow border border-gray-200 flex justify-between items-start">
+                            <div>
+                                <h4 class="text-lg font-bold text-gray-800">${data.title}</h4>
+                                <p class="text-sm text-gray-600 mt-1">${data.content}</p>
+                                <p class="text-xs text-gray-400 mt-2">Diumumkan: ${formattedDate}</p>
+                            </div>
+                            <button class="delete-ann-btn text-red-500 hover:text-red-700 ml-4 p-1 rounded hover:bg-red-50" data-id="${doc.id}">
+                                <i data-lucide="trash-2" class="w-5 h-5"></i>
+                            </button>
+                        </div>
+                    `;
+                });
+            }
+            listEl.innerHTML = html;
+            lucide.createIcons();
+            
+            listEl.querySelectorAll('.delete-ann-btn').forEach(btn => {
+                btn.addEventListener('click', (e) => deleteAnnouncement(e.currentTarget.dataset.id));
+            });
+
+        }, (error) => {
+            listEl.innerHTML = `<p class="text-red-500">Gagal memuat daftar pengumuman: ${error.message}</p>`;
+            console.error("Error fetching admin announcements:", error);
+        });
+    };
+
+    const deleteAnnouncement = async (announcementId) => {
+        if (!confirm('Yakin ingin menghapus pengumuman ini?')) return;
+        try {
+            const docRef = doc(getAnnouncementColRef(), announcementId);
+            await deleteDoc(docRef);
+            alertMessage("Berhasil", "Pengumuman berhasil dihapus.", 'success');
+        } catch (error) {
+            console.error("Gagal menghapus pengumuman:", error);
+            alertMessage("Gagal", `Tidak dapat menghapus pengumuman: ${error.message}`, 'error');
+        }
+    };
+
+    // View: Iuran / Kas (Admin)
+    const renderAdminIuranView = () => `
+        <h3 class="text-2xl font-bold text-yellow-600 mb-4">Manajemen Iuran & Kas Warga</h3>
+
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+            <div class="bg-blue-50 p-4 rounded-lg shadow-inner border border-blue-200 text-center">
+                <p class="text-sm text-blue-700 font-medium">Total Saldo Kas</p>
+                <p id="admin-total-kas" class="text-3xl font-bold text-blue-800">Rp 0</p>
+            </div>
+            <div class="bg-green-50 p-4 rounded-lg shadow-inner border border-green-200 text-center">
+                <p class="text-sm text-green-700 font-medium">Warga Sudah Bayar Bulan Ini</p>
+                <p id="admin-paid-count" class="text-3xl font-bold text-green-800">0</p>
+            </div>
+            <div class="bg-red-50 p-4 rounded-lg shadow-inner border border-red-200 text-center">
+                <p class="text-sm text-red-700 font-medium">Warga Belum Bayar Bulan Ini</p>
+                <p id="admin-unpaid-count" class="text-3xl font-bold text-red-800">0</p>
+            </div>
+        </div>
+        
+        <h4 class="text-xl font-bold text-gray-800 mb-3 border-t pt-4">Input Pembayaran Iuran Warga</h4>
+        <form id="admin-dues-input-form" class="bg-gray-100 p-4 rounded-xl mb-6 grid grid-cols-2 md:grid-cols-5 gap-3">
+            <select id="dues-user-select" class="col-span-2 p-2 border rounded-lg" required>
+                <option value="">-- Pilih Warga --</option>
+            </select>
+            <input type="month" id="dues-month-year" class="p-2 border rounded-lg" value="${new Date().toISOString().substring(0, 7)}" required>
+            <input type="number" id="dues-amount" class="p-2 border rounded-lg" placeholder="Nominal (ex: 50000)" required>
+            <button type="submit" class="bg-yellow-600 hover:bg-yellow-700 text-white font-medium py-2 px-4 rounded-lg flex items-center justify-center">
+                <i data-lucide="plus" class="w-5 h-5 mr-1"></i> Input Bayar
+            </button>
+        </form>
+
+        <h4 class="text-xl font-bold text-gray-800 mb-3 border-t pt-4">Riwayat Transaksi Kas (Ledger)</h4>
+        <div id="admin-dues-ledger-list" class="overflow-x-auto">
+             <table class="min-w-full bg-white rounded-lg shadow-md">
+                <thead>
+                    <tr class="bg-gray-200 text-gray-600 uppercase text-sm leading-normal">
+                        <th class="py-3 px-6 text-left">Waktu</th>
+                        <th class="py-3 px-6 text-left">Keterangan</th>
+                        <th class="py-3 px-6 text-right">Debit (Masuk)</th>
+                    </tr>
+                </thead>
+                <tbody id="admin-dues-ledger-body" class="text-gray-600 text-sm font-light">
+                    <tr><td colspan="3" class="text-center py-4">Memuat data kas...</td></tr>
+                </tbody>
+            </table>
+        </div>
+    `;
+    
+    const loadAdminDuesSummary = async (parentEl) => {
+        const totalKasEl = parentEl.querySelector('#admin-total-kas');
+        const paidCountEl = parentEl.querySelector('#admin-paid-count');
+        const unpaidCountEl = parentEl.querySelector('#admin-unpaid-count');
+        const ledgerBodyEl = parentEl.querySelector('#admin-dues-ledger-body');
+        const userSelectEl = parentEl.querySelector('#dues-user-select');
+
+        const currentMonthYear = new Date().toISOString().substring(0, 7);
+        let residentList = []; // Untuk dropdown input
+
+        // 1. Ambil Semua Data Warga untuk Dropdown
+        try {
+            const residentSnapshot = await getDocs(collection(db, 'artifacts', appId, 'public/data', 'residents'));
+            residentSnapshot.forEach(doc => {
+                const data = doc.data();
+                if (data.email !== ADMIN_EMAIL) { // Jangan masukkan admin ke daftar iuran
+                    residentList.push(data);
+                    userSelectEl.innerHTML += `<option value="${data.uid}" data-name="${data.nama}" data-alamat="${data.alamat_lengkap}">${data.nama} (${data.alamat_lengkap})</option>`;
+                }
+            });
+        } catch (error) {
+            console.error("Gagal memuat daftar warga:", error);
+            userSelectEl.innerHTML += `<option value="" disabled>Gagal memuat warga</option>`;
+        }
+
+        // 2. Listener untuk Ledger dan Summary
+        onSnapshot(getDuesLedgerColRef(), (snapshot) => {
+            let totalKas = 0;
+            let ledgerHtml = '';
+            let currentMonthPaidUids = new Set();
+            
+            const allLedgerEntries = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+            // 2a. Hitung Total Kas dan Render Ledger
+            allLedgerEntries.sort((a, b) => b.timestamp?.toMillis() - a.timestamp?.toMillis()).forEach(data => {
+                if (data.type === 'DEBIT') {
+                    totalKas += data.amount;
+                }
+                
+                // Cek status pembayaran bulan ini
+                if (data.monthYear === currentMonthYear && data.type === 'DEBIT' && data.userId) {
+                    currentMonthPaidUids.add(data.userId);
+                }
+
+                const formattedDate = data.timestamp ? new Date(data.timestamp.seconds * 1000).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }) : 'N/A';
+                ledgerHtml += `
+                    <tr class="border-b border-gray-200 hover:bg-gray-100">
+                        <td class="py-3 px-6 text-left whitespace-nowrap">${formattedDate}</td>
+                        <td class="py-3 px-6 text-left">${data.description}</td>
+                        <td class="py-3 px-6 text-right font-medium text-green-700">Rp ${data.amount.toLocaleString('id-ID')}</td>
+                    </tr>
+                `;
+            });
+            
+            totalKasEl.textContent = `Rp ${totalKas.toLocaleString('id-ID')}`;
+            ledgerBodyEl.innerHTML = ledgerHtml || `<tr><td colspan="3" class="text-center py-4">Belum ada riwayat transaksi kas.</td></tr>`;
+
+            // 2b. Hitung Status Pembayaran Bulan Ini
+            const totalResidents = residentList.length;
+            const paidCount = currentMonthPaidUids.size;
+            const unpaidCount = totalResidents - paidCount;
+
+            paidCountEl.textContent = paidCount;
+            unpaidCountEl.textContent = unpaidCount;
+            
+            // 2c. Update Summary Doc (opsional, untuk client view)
+            setDoc(doc(db, 'artifacts', appId, 'public/data', 'dues_ledger', 'summary'), { totalKas }, { merge: true });
+
+        }, (error) => {
+            console.error("Gagal memuat ledger:", error);
+            ledgerBodyEl.innerHTML = `<tr><td colspan="3" class="text-center py-4 text-red-500">Gagal memuat data kas: ${error.message}</td></tr>`;
+        });
+
+        // 3. Setup Form Listener
+        parentEl.querySelector('#admin-dues-input-form').addEventListener('submit', (e) => handleDuesInput(e, residentList));
+    };
+
+    const handleDuesInput = async (e, residentList) => {
+        e.preventDefault();
+        const userId = document.getElementById('dues-user-select').value;
+        const monthYear = document.getElementById('dues-month-year').value;
+        const amount = parseInt(document.getElementById('dues-amount').value);
+
+        if (!userId || !monthYear || isNaN(amount) || amount <= 0) {
+            alertMessage("Input Tidak Valid", "Mohon lengkapi semua field dengan benar.", 'error');
+            return;
+        }
+
+        const resident = residentList.find(r => r.uid === userId);
+        const residentName = resident.nama || 'Warga';
+        const residentAddress = resident.alamat_lengkap || 'Alamat N/A';
+        const description = `Pembayaran Iuran Bulan ${monthYear.replace('-', '/')} oleh ${residentName} (${residentAddress})`;
+
+        try {
+            // 1. Tambahkan ke Ledger (Public)
+            await addDoc(getDuesLedgerColRef(), {
+                type: 'DEBIT',
+                amount: amount,
+                description: description,
+                userId: userId,
+                monthYear: monthYear,
+                timestamp: serverTimestamp()
+            });
+
+            // 2. Update Status Pembayaran Pribadi Warga (Private)
+            const duesStatusDocRef = doc(getPrivateCollectionRef(userId, 'dues_status'), monthYear);
+            await setDoc(duesStatusDocRef, {
+                monthYear: monthYear,
+                status: 'Lunas',
+                amount: amount,
+                paidByAdminId: currentUserId,
+                paidAt: serverTimestamp()
+            }, { merge: true });
+
+            alertMessage("Berhasil", `Iuran ${monthYear} untuk ${residentName} berhasil diinput (Rp ${amount.toLocaleString('id-ID')}).`, 'success');
+            document.getElementById('admin-dues-input-form').reset();
+            document.getElementById('dues-month-year').value = new Date().toISOString().substring(0, 7);
+
+        } catch (error) {
+            console.error("Gagal input iuran:", error);
+            alertMessage("Gagal", `Terjadi kesalahan saat menyimpan data iuran: ${error.message}`, 'error');
+        }
+    };
+    
+    // View: Data Warga (Admin)
+    const renderAdminWargaView = () => `
+        <h3 class="text-2xl font-bold text-purple-600 mb-4">Data Warga Perumahan</h3>
+        <input type="text" id="warga-search" class="w-full p-2 border rounded-lg mb-4 shadow-sm" placeholder="Cari berdasarkan Nama, Blok/Nomor, atau No. KK...">
+
+        <div id="admin-warga-list" class="overflow-x-auto">
+            <table class="min-w-full bg-white rounded-lg shadow-md">
+                <thead>
+                    <tr class="bg-gray-200 text-gray-600 uppercase text-sm leading-normal">
+                        <th class="py-3 px-6 text-left">Nama Warga</th>
+                        <th class="py-3 px-6 text-left">Alamat</th>
+                        <th class="py-3 px-6 text-left">No. KK</th>
+                        <th class="py-3 px-6 text-left">Kontak</th>
+                    </tr>
+                </thead>
+                <tbody id="admin-warga-list-body" class="text-gray-600 text-sm font-light">
+                    <tr><td colspan="4" class="text-center py-4">Memuat data warga...</td></tr>
+                </tbody>
+            </table>
+        </div>
+    `;
+
+    const loadAdminResidentData = async (parentEl) => {
+        const listBodyEl = parentEl.querySelector('#admin-warga-list-body');
+        const searchInput = parentEl.querySelector('#warga-search');
+        let allResidents = [];
+
+        try {
+            const snapshot = await getDocs(collection(db, 'artifacts', appId, 'public/data', 'residents'));
+            allResidents = snapshot.docs
+                .map(doc => ({ id: doc.id, ...doc.data() }))
+                .filter(res => res.email !== ADMIN_EMAIL); // Filter Admin
+
+            renderResidentTable(allResidents, listBodyEl);
+            
+            searchInput.addEventListener('input', () => {
+                const query = searchInput.value.toLowerCase();
+                const filteredResidents = allResidents.filter(resident => 
+                    resident.nama?.toLowerCase().includes(query) ||
+                    resident.alamat_lengkap?.toLowerCase().includes(query) ||
+                    resident.no_kk?.some(kk => kk.includes(query))
+                );
+                renderResidentTable(filteredResidents, listBodyEl);
+            });
+
+        } catch (error) {
+            console.error("Gagal memuat data warga:", error);
+            listBodyEl.innerHTML = `<tr><td colspan="4" class="text-center py-4 text-red-500">Gagal memuat data warga: ${error.message}</td></tr>`;
+        }
+    };
+
+    const renderResidentTable = (residents, listBodyEl) => {
+        let html = '';
+        if (residents.length === 0) {
+            html = `<tr><td colspan="4" class="text-center py-4">Tidak ada data warga yang ditemukan.</td></tr>`;
+        } else {
+            residents.sort((a, b) => a.alamat_lengkap.localeCompare(b.alamat_lengkap)).forEach(res => {
+                html += `
+                    <tr class="border-b border-gray-200 hover:bg-gray-100">
+                        <td class="py-3 px-6 text-left font-medium">${res.nama}</td>
+                        <td class="py-3 px-6 text-left">${res.alamat_lengkap}</td>
+                        <td class="py-3 px-6 text-left">${res.no_kk?.join(', ') || '-'}</td>
+                        <td class="py-3 px-6 text-left">
+                            <a href="mailto:${res.email}" class="text-blue-500 hover:underline text-xs">${res.email}</a><br>
+                            <span class="text-xs">${res.no_hp || '-'}</span>
+                        </td>
+                    </tr>
+                `;
+            });
+        }
+        listBodyEl.innerHTML = html;
+    };
+
+
+    // --- INISIALISASI AKHIR ---
+    window.onload = () => {
+        // Otentikasi onAuthStateChanged akan otomatis memanggil render yang sesuai
+        // Pastikan ikon di dashboard admin/client terrender jika sudah login saat page load
+        if (auth.currentUser && !auth.currentUser.isAnonymous) {
+            lucide.createIcons();
+        }
+    };
+
+</script>
+
+</body>
+</html>
